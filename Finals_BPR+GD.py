@@ -26,7 +26,7 @@ Requirements
 - Python 3.9+
 - pandas, numpy, torch, tqdm, geopy
 
-Author: Ziyi Zhang
+Author: Ziyi Zhang, Yanbing Wang 
 """
 
 import pandas as pd
@@ -278,3 +278,4 @@ x_df = pd.DataFrame(x_result, index=[str(t) for t in time_list], columns=routes)
 x_df.to_excel("output/export_data.xlsx", index_label='Time')
 
 print("Optimization complete and results saved.")
+
