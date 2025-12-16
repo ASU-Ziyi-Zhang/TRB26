@@ -1,5 +1,7 @@
 # Roosevelt_Calibration — BPR + Gradient Descent Calibration & Evaluation
 
+[![License](https://img.shields.io/badge/license-See%20LICENSE-green.svg)](LICENSE)
+
 A compact toolkit for modeling and evaluating traffic flow on **Roosevelt Rd, Chicago, IL 60607** using:
 
 1. Movement counts from **Sage** nodes  
