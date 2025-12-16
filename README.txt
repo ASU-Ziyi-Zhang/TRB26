@@ -1,51 +1,130 @@
-# Roosevelt_Calibration Project Documentation
+Roosevelt_Calibration — BPR+GD Calibration & Evaluation
 
-This project is designed to model and evaluate the traffic flow on Roosevelt Rd, Chicago, IL 60607. The entire process is divided into three main parts: Data Preprocessing, Calibration Model, and Model Evaluation. Below is a detailed description of each step:
+This project models and evaluates traffic flow on Roosevelt Rd, Chicago, IL 60607 using:
+1) movement counts from Sage nodes,
+2) per-minute travel times from HERE (TMC), and
+3) a physics-guided learning model combining BPR with gradient descent (PyTorch).
 
-## 1. Data Preprocessing
+It includes:
+- Route–Movement reconstruction via an A-matrix
+- BPR+GD hybrid calibration (path flows + learnable BPR parameters)
+- Two evaluation modes: per (Node, Direction) and per-minute aggregated
 
-### 1.1 Construct SUMO Simulation Network
+Repository layout
+--------------------------------
+.
+├─ data/
+│  ├─ Movement_Data.xlsx                # Observed movements: Time, Node, Direction, Value
+│  ├─ Route_Movement_Matrix.xlsx        # A-matrix: first 3 meta cols, then route columns
+│  ├─ TMC_data.csv                      # HERE TMC travel times (per minute)
+│  ├─ TMC_Identification.csv            # HERE TMC ID ↔ length (miles), etc.
+│  └─ TMC_mapping.xlsx          # Final mapping & params (lane, cap, reference_speed, Node)
+│
+├─ output/
+│  ├─ export_data.xlsx                  # Predicted path flows (X): Time + R route columns (model output)
+│  └─ evaluation/
+│     ├─ error_data.xlsx                # Per-node metrics + overall summary
+│     ├─ observed_heatmap.png           # Heatmap of observed movements
+│     ├─ predicted_heatmap_gd.png       # Heatmap of predicted movements
+│     ├─ per_minute_errors.xlsx         # Per-minute totals & errors
+│     ├─ worst_minutes_top50.xlsx       # Top-50 worst minutes by AE
+│     ├─ per_minute_series.png          # Observed vs Predicted per-minute series
+│     └─ per_minute_abs_error.png       # Absolute error per minute
+│
+├─ Finals_BPR_GD.py         # BPR+GD calibration (PyTorch)
+└─ Evaluate.py    # Evaluation: per-node + per-minute (observed-subset)
 
-Firstly, a proportionally scaled SUMO simulation network was created for Roosevelt Rd, Chicago, IL 60607. The latitude and longitude of this network correspond to the real-world road coordinates and are saved as `roosevelt.net.xml`.
+If a folder under output/ is missing, the scripts will create it.
 
-### 1.2 Extract Route Data
+Environment
+-----------
+- Python ≥ 3.9
+- Packages: pandas, numpy, torch, tqdm, geopy, openpyxl,
+  matplotlib, seaborn, scikit-learn, pytz
 
-A program named `Get_routes.py` was written to extract all the routes from the SUMO simulation network, and the results are saved as `roosevelt.rou.xml`.
+Quick install:
+pip install pandas numpy torch tqdm geopy openpyxl matplotlib seaborn scikit-learn pytz
 
-### 1.3 Extract Segment Coordinates
+Data assumptions & units
+------------------------
+- Time resolution: 1 minute (all inputs aligned at minute level).
+- A-matrix: maps routes (R) to intersection movements (L); first 3 columns are meta (Node, Direction, …),
+  then route columns.
+- Movement meaning: (Node, Direction) denotes lane movements within one approach (e.g., Left/Straight/Right).
+- BPR params & units:
+  - t_free (seconds) from miles / reference_speed * 3600
+  - cap is per-minute capacity for the whole approach (already lane-adjusted: cap * lane)
+  - radio is the overlap ratio (0–1) between a SUMO segment and a TMC segment (by longitude span).
+- TZ: scripts normalize timestamps to America/Chicago for joining/plots.
 
-Using the constructed SUMO network, the program `Node_extraction.py` was utilized to extract the latitude and longitude coordinates of the start and end points of each road segment, with the results saved in `Road_segments_conversion.xlsx`.
+Method — BPR + Gradient Descent (physics-guided)
+------------------------------------------------
+Variables
+- Path flows X_{r,t} ≥ 0 (decision variable, optimized per route per minute).
+- Movements C_{l,t} = Σ_r A_{l,r} X_{r,t}.
+- Per-minute network travel time (observed) y_obs,t from HERE (summed across matched TMCs).
 
-### 1.4 Extract Sage Node Data
+BPR travel time model (learnable)
+For each mapped row (Node, tmc_id):
+  y_{l,t} = t_free,l * radio_l + t_free,l * α * radio_l * ((flow_node(l),t / cap_l)^β)
 
-Data for each Sage node in the network was obtained from https://vto.sagecontinuum.org/nodes. Data from February 28th, 16:00 to March 1st, 16:00 was selected and saved in `Sage_node_Row_data.xlsx`. Due to inconsistent data collection intervals, the data was resampled to a 1-minute interval using the `Resample_sage_row_data.py` program, and the final dataset is saved as `Sage_data.xlsx`.
+- Flow used in BPR is the approach-level sum of movements belonging to the same Node (L+T+R),
+  consistent with capacity being the whole-approach capacity.
+- α, β are global learnable scalars with bounds (e.g., α ∈ [0.01,1.0], β ∈ [1,8]) and a small prior (anchor)
+  at (0.15, 4.0).
 
-## 2. Calibration Model
+Loss (multi-task, normalized)
+  L = MSE((C - C_obs)/σ_C) + MSE((y - y_obs)/σ_y) + λ_α(α-0.15)^2 + λ_β(β-4)^2
 
-### 2.1 Step 1: Route Flow Calibration Using Movement Counts Only
+- Normalization by empirical stds improves balancing.
+- Non-negativity on X via ReLU.
+- Optimization: Adam, gradient clipping optional.
+Outputs: The script writes output/export_data.xlsx with per-minute path flows X; these are then used by the evaluation.
 
-The goal of this step is to estimate time-varying route flows using the observed movement counts from Sage nodes. The steps are as follows:
+How to run
+----------
+Run from the repository root. Make sure the data files are in the paths shown above.
 
-- Using the `roosevelt.net.xml` and `roosevelt.rou.xml` files, a `Route-Movement Matrix` was created by the script `step1_route-movement_matrix.py`, and the matrix was saved as `Route_Movement_matrix.xlsx`. After this step, the relationship matrix was manually filtered to include only the routes that intersect with Sage nodes.
+1) Calibrate with BPR+GD (produces output/export_data.xlsx):
+   python Finals_BPR_GD.py
 
-- The `Route_Movement_matrix.xlsx` and `Sage_data.xlsx` were used, and the `cvxpy` library was applied to obtain an initial prediction matrix, which records the number of vehicles for each route at each time step. This result is saved as `Step1_result.xlsx`.
+2) Evaluate (per-node + per-minute):
+   python Evaluate.py
 
-### 2.2 Step 2: Hybrid Calibration Using Additional TMC Travel Time
+What you get from evaluation
+- output/evaluation/error_data.xlsx
+  • per_node: MAE/RMSE/MAPE/sMAPE per (Node, Direction)
+  • overall: column-wise averages over nodes
+  • per_minute: observed/predicted totals and per-minute AE/APE/sMAPE
+- Heatmaps: observed_heatmap.png, predicted_heatmap_gd.png
+- Time-series: per_minute_series.png, per_minute_abs_error.png
+- Worst minutes: worst_minutes_top50.xlsx
 
-Additional data from HERE Technologies was introduced, which provides per-minute vehicle speed and observation time, saved in `TMC_data.csv`. As the TMC road segments differ from the SUMO network, the segments needed to be matched based on latitude and longitude. The steps are as follows:
+Per-minute aggregation rule
+- For each minute, sum only movements that have an observation at that minute
+  (threshold configurable inside the script: OBS_POS_THRESHOLD; default > 0).
+- Error metrics on this per-minute series:
+  AE (absolute error), sMAPE, MAPE (only when denom ≥ MAPE_MIN_DENOM, default 5), WAPE.
 
-- The script `step2_TMC_road_mapping.py` was used to map the real network to TMC segments based on latitude and longitude. The initial mapping was saved in `TMC_Road_mapping.xlsx`.
+Practical tips
+--------------
+- Time alignment: Put all inputs on the same clock. The scripts convert to America/Chicago and align at minute strings.
+- Routes consistency: Route columns in Route_Movement_Matrix.xlsx must match those in output/export_data.xlsx.
+- MAPE stability: If many minutes have tiny observed totals, consider raising MAPE_MIN_DENOM (e.g., 10) or prefer sMAPE/WAPE.
+- Movement subset rule: If 0 means missing rather than true zero in observations, keep OBS_POS_THRESHOLD > 0.
+  If 0 is a valid count, set it to 0.0.
+- Units: Ensure cap is per-minute, and t_free is in seconds; radio ∈ [0,1].
+- BPR parameters: You can narrow/widen α,β bounds if the corridor shows different sensitivity.
 
-- Due to errors in latitude and longitude matching, some road segments were incorrectly matched. Therefore, we manually selected the correct matches and added parameters for each Sage node, including lane count (`lane`), basic capacity (`cap`), free-flow speed (`reference_speed`), and node ID (`Node`). This data was saved in `UP_TMC_Road_mapping.xlsx`.
+Reproducibility checklist
+-------------------------
+- Put files under data/ or the exact relative paths listed above.
+- Confirm output/ exists or let the scripts create it.
+- Record your epochs, learning rate, and chosen HAS_DATA_THRESH/MAPE_DENOM_THRESH.
+- Save the metrics.xlsx and plots alongside your commit for traceability.
 
-- Finally, the script `step2_model_pytorch.py` was used to perform modeling with gradient descent using Pytorch. The files used were `Sage_data.xlsx`, `Route_Movement_matrix.xlsx`, `UP_TMC_Road_mapping.xlsx`, `TMC_data.csv`, and `TMC_Identification.csv`. The results are saved in `step2_result.xlsx`.
-
-## 3. Model Evaluation
-
-### 3.1 Step 1 Evaluation: Error Analysis per Node-Direction
-
-The `Evaluation1.py` program analyzes the error for each node and direction, and generates a heatmap of predicted vehicle counts for each minute.
-
-### 3.2 Step 2 Evaluation: Overall Error Analysis
-
-The `Evaluation2.py` program analyzes the overall error in predicted vehicle counts for each minute and generates a line chart comparing predicted and observed values.
+Acknowledgements
+----------------
+- Sage node data: https://vto.sagecontinuum.org/nodes
+- HERE TMC data (travel times)
+- SUMO network files for Roosevelt Rd
