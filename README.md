@@ -207,17 +207,6 @@ To reproduce results:
 
 ---
 
-## 📝 License
-
-Copyright © 2025 **Ziyi Zhang**.  
-All rights reserved.
-
-This repository is intended for non-commercial research and prototyping use.  
-For redistribution, modification, or commercial use, please refer to the accompanying `LICENSE` file (if present) or contact the authors to obtain explicit permission.
-
-If you adopt this code or methodology in academic work, please provide appropriate citation to the corresponding paper or technical report.
-
-
 ## 🙏 Acknowledgements
 
 - Sage node data: https://vto.sagecontinuum.org/nodes  
